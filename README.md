@@ -1,4 +1,7 @@
 # Vulnerability Advisory: Broken Access Control / Improper Authorization in Password Change
+**Researcher:** Shailendra Mourya [CyberShailendra](https://github.com/CyberShailendra1)
+
+**Contact:** cybershailendra1@gmail.com
 
 ### Affected Product
 - **Name:** User Registration & Login and User Management System With admin panel
