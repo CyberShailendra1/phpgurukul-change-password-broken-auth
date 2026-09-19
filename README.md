@@ -1,12 +1,21 @@
-# Vulnerability Advisory: Broken Access Control / Improper Authorization in Password Change
-**Researcher:** Shailendra Mourya [CyberShailendra](https://github.com/CyberShailendra1)
+# Improper Authorization / Broken Access Control in Password Change (Admin Panel)
 
-**Contact:** cybershailendra1@gmail.com
+- **Researcher:** Shailendra Mourya ([CyberShailendra](https://github.com/CyberShailendra1))
 
-### Affected Product
-- **Name:** User Registration & Login and User Management System With admin panel
-- **Vendor Homepage:** [https://phpgurukul.com/user-registration-login-and-user-management-system-with-admin-panel/](https://phpgurukul.com/user-registration-login-and-user-management-system-with-admin-panel/)
-- **Affected Version:** V3.3
+- **Contact:** cybershailendra1@gmail.com
+
+- **Product:** User Registration & Login and User Management System With admin panel
+
+- **Vendor:** https://phpgurukul.com/user-registration-login-and-user-management-system-with-admin-panel/
+
+- **Version:** V3.3
+
+- **Vulnerability Type:** CWE-863: Incorrect Authorization (Broken Access Control)
+
+- **Vulnerable File:** `loginsystem/admin/change-password.php` (Lines 9-16)
+
+- **Vulnerable Parameter:** `currentpassword` (POST)
+
 
 ---
 
@@ -14,24 +23,20 @@
 ```text
 User Registration and login System with admin panel/
 └── loginsystem/
-    ├── change-password.php          ← user-side (reported separately)
+
+    ├── change-password.php        ← user-side (reported separately)
+    
     └── admin/
+    
         └── change-password.php      ← admin-side (Lines 9-16 vulnerable)
 ```
 
-- **Vulnerable File:** `/loginsystem/admin/change-password.php`
-- **Vulnerable Lines:** Lines 9–16
-- **Vulnerable Parameter:** `currentpassword` (POST)
-- **Vulnerability Type:** Improper Authorization / Broken Access Control ([CWE-863](https://cwe.mitre.org/data/definitions/863.html))
-- **Attack Type:** Remote, Authenticated (requires a valid admin session)
+### Description & Root Cause
 
----
-
-### Root Cause
-Identical logic flaw to the one present in the user-panel `loginsystem/change-password.php` (reported separately), but affecting the `admin` table. The current-password verification query checks whether the submitted (MD5-hashed) value matches **ANY** row in the `admin` table, rather than being scoped to the currently authenticated admin's own record:
+In `loginsystem/admin/change-password.php`, the application fails to tie the current-password validation query to the authenticated administrator's session ID (`$_SESSION['adminid']`). 
 
 ```php
-// loginsystem/admin/change-password.php (Lines 9-16)
+// loginsystem/admin/change-password.php lines 9-16
 $oldpassword=md5($_POST['currentpassword']); 
 $newpassword=md5($_POST['newpassword']);
 $sql=mysqli_query($con,"SELECT password FROM admin where password='$oldpassword'");
@@ -42,47 +47,55 @@ $adminid=$_SESSION['adminid'];
 $ret=mysqli_query($con,"update admin set password='$newpassword' where id='$adminid'");
 ```
 
-The `SELECT` statement omits `WHERE id='$adminid'`, so it returns a match for **ANY** admin row's password, not necessarily the logged-in admin's own credential. Only the `UPDATE` is correctly scoped to the session's admin ID.
+The `SELECT` query checks if the provided `currentpassword` matches any record in the `admin` table. If the database contains multiple admin accounts and the attacker submits the password of any other administrator, the check evaluates to true. The subsequent `UPDATE` query then changes the password for the current session's `adminid`.
 
 ---
 
-### Difference From Related Reports (CVE-2025-28011 Distinction)
-This vulnerability is strictly distinct from **CVE-2025-28011** (which covers SQL Injection on the `currentpassword` parameter in the same file/endpoint):
-- **CVE-2025-28011** is an input-sanitization / injection vulnerability where unescaped input allows SQL injection payloads.
-- **This vulnerability (CWE-863)** is a pure authorization / business logic flaw. Even if all SQL queries are 100% parameterized with prepared statements and completely immune to SQL injection, this vulnerability **still exists** because the verification query structurally lacks a per-session identity constraint (`WHERE id='$adminid'`). Reviewers must not flag this as a duplicate of CVE-2025-28011.
+### Distinction from CVE-2025-28011
+
+This issue is not a duplicate of **CVE-2025-28011**:
+- **CVE-2025-28011** covers SQL Injection caused by concatenated inputs in `currentpassword`.
+- **This report** covers a logic/authorization flaw (CWE-863). Even if the code uses prepared statements and eliminates SQL injection completely, the validation query still lacks the `WHERE id='$adminid'` constraint and remains vulnerable.
 
 ---
 
-### Proof of Concept (PoC)
+### Reproduction Steps (PoC)
 
-1. Log in to the admin panel with known admin credentials (e.g. `admin` / `Test@12345`, as documented in the project's `Readme.txt`).
-2. Navigate to **Admin > Change Password** (`/loginsystem/admin/change-password.php`).
-3. Submit the Current Password field with the MD5-equivalent plaintext of **ANY** admin account's actual password (in a single-admin deployment this offers limited extra value beyond the admin's own known password, but the flaw generalizes to any deployment with multiple admin accounts sharing the `admin` table):
+1. Sign in to the admin panel (`/loginsystem/admin/`).
+2. Go to **Change Password** (`/loginsystem/admin/change-password.php`).
+3. Send a POST request where `currentpassword` is set to the password of any existing admin account in the database:
 
 ```http
 POST /loginsystem/admin/change-password.php HTTP/1.1
-Host: localhost
-Cookie: PHPSESSID=<admin_session>
+Host: target-host
+Cookie: PHPSESSID=<valid_admin_session>
 Content-Type: application/x-www-form-urlencoded
 
-currentpassword=<any_valid_admin_password>&newpassword=Hacked999&update=Update
+currentpassword=TargetAdminPassword&newpassword=NewPassword123!&update=Update
 ```
 
-4. The application responds `"Password Changed Successfully !!"` and updates the session admin's own password, regardless of whether the submitted "current password" belonged to that specific admin account.
+4. The query returns a match from the `admin` table, and the application updates the password of the active session's admin account.
 
 ---
 
 ### Impact
-In multi-admin deployments of this codebase (the schema supports multiple rows in the `admin` table), an admin whose session is compromised (e.g. via XSS, session fixation, or a stolen cookie) can bypass the current-password re-authentication gate by supplying any **OTHER** admin's known password, without knowing their own actual session-owner's password. This weakens defense-in-depth against session-based account-takeover chains. Severity is lower than the user-panel equivalent in single-admin deployments (the shipped default configuration has one admin account), but the underlying code defect is identical and the CWE-863 classification applies equally.
+
+Re-authentication controls exist to prevent unauthorized changes when a session is hijacked (via stolen session tokens, XSS, or local browser access). Because this check is not bound to the session owner's account, an attacker can bypass the re-authentication prompt using any valid admin password across the system to gain persistence over the hijacked account.
 
 ---
 
-### Mitigation
-Scope the verification query to the logged-in admin's own row:
+### Remediation
+
+Bind the current-password check to the session user:
 
 ```php
 $adminid = $_SESSION['adminid'];
-$sql = mysqli_query($con, "SELECT password FROM admin WHERE id='$adminid' AND password='$oldpassword'");
-```
+$stmt = $con->prepare("SELECT id FROM admin WHERE id=? AND password=?");
+$stmt->bind_param("ss", $adminid, $oldpassword);
+$stmt->execute();
+$result = $stmt->get_result();
 
-Use prepared statements regardless of this fix.
+if($result->num_rows > 0) {
+    // proceed with update
+}
+```
