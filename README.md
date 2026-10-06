@@ -3,6 +3,8 @@
 - **Researcher:** Shailendra Mourya ([CyberShailendra](https://github.com/CyberShailendra1))
 
 - **Contact:** cybershailendra1@gmail.com
+- **Entry:** VDB-413696
+- **CVE id:** CVE-2026-105703
 
 - **Product:** User Registration & Login and User Management System With admin panel
 
